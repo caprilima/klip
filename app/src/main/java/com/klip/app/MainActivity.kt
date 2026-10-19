@@ -32,6 +32,17 @@ class MainActivity : Activity() {
         btn("1) Erişilebilirliği aç (F8 için)") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        val prefs = getSharedPreferences("klip", MODE_PRIVATE)
+        val names = RecorderService.PRESETS.map { it.name }
+        val qBtn = Button(this)
+        fun setQ() { qBtn.text = "Kalite: " + names[prefs.getInt("q", 2)] + " (değiştir)" }
+        qBtn.setOnClickListener {
+            prefs.edit().putInt("q", (prefs.getInt("q", 2) + 1) % names.size).apply()
+            setQ()
+            Toast.makeText(this, "Kaydı durdurup yeniden başlatınca geçerli olur", Toast.LENGTH_SHORT).show()
+        }
+        setQ()
+        layout.addView(qBtn)
         btn("2) Kaydı başlat") {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this, "Önce mikrofon iznini ver, sonra tekrar bas", Toast.LENGTH_LONG).show()

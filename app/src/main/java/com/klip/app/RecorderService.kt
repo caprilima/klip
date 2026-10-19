@@ -26,6 +26,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
+import android.view.Surface
 import android.widget.Toast
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
@@ -39,9 +40,20 @@ class RecorderService : Service() {
         @Volatile var instance: RecorderService? = null
         const val WINDOW_US = 30_000_000L // 30 saniye
         const val RATE = 44100
+        val PRESETS = listOf(
+            Preset("720p 30fps 8 Mbps", 720, 30, 8_000_000),
+            Preset("1080p 30fps 14 Mbps", 1080, 30, 14_000_000),
+            Preset("1080p 60fps 45 Mbps", 1080, 60, 45_000_000),
+            Preset("1080p 120fps 60 Mbps", 1080, 120, 60_000_000),
+            Preset("1440p 60fps 70 Mbps", 1440, 60, 70_000_000),
+            Preset("4K 60fps 100 Mbps", 2160, 60, 100_000_000),
+            Preset("4K 120fps 100 Mbps", 2160, 120, 100_000_000)
+        )
     }
 
     class Frame(val data: ByteArray, val pts: Long, val flags: Int)
+
+    class Preset(val name: String, val shortSide: Int, val fps: Int, val bitrate: Int)
 
     private val frames = ArrayDeque<Frame>()   // video
     private val aframes = ArrayDeque<Frame>()  // ses
@@ -91,30 +103,57 @@ class RecorderService : Service() {
         projection = proj
 
         val dm = resources.displayMetrics
-        val scale = minOf(1f, 1280f / maxOf(dm.widthPixels, dm.heightPixels))
-        val w = ((dm.widthPixels * scale).toInt() / 16) * 16
-        val h = ((dm.heightPixels * scale).toInt() / 16) * 16
-
-        val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, 6_000_000)
-            setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 200_000L)
+        var qi = getSharedPreferences("klip", MODE_PRIVATE).getInt("q", 2)
+            .coerceIn(0, PRESETS.size - 1)
+        var enc: MediaCodec? = null
+        var surface: Surface? = null
+        var w = 0
+        var h = 0
+        // İstenen kalite desteklenmiyorsa bir alt kaliteye düşer
+        while (enc == null) {
+            val pr = PRESETS[qi]
+            val scale = minOf(1f, pr.shortSide.toFloat() / minOf(dm.widthPixels, dm.heightPixels))
+            w = ((dm.widthPixels * scale).toInt() / 16) * 16
+            h = ((dm.heightPixels * scale).toInt() / 16) * 16
+            try {
+                val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                    setInteger(MediaFormat.KEY_BIT_RATE, pr.bitrate)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, pr.fps)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                    setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 200_000L)
+                }
+                val e = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                try {
+                    e.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    surface = e.createInputSurface()
+                    e.start()
+                    enc = e
+                } catch (ex: Exception) {
+                    try { e.release() } catch (_: Exception) {}
+                    throw ex
+                }
+            } catch (ex: Exception) {
+                if (qi == 0) {
+                    toast("Kodlayıcı başlatılamadı: ${ex.message}")
+                    stopAll()
+                    stopSelf()
+                    return
+                }
+                qi--
+                toast("Bu kalite desteklenmiyor, ${PRESETS[qi].name} deneniyor")
+            }
         }
-        val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        val surface = enc.createInputSurface()
-        enc.start()
         encoder = enc
 
         display = proj.createVirtualDisplay(
             "klip", w, h, dm.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface, null, null
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface!!, null, null
         )
         running = true
         instance = this
-        Thread { drain(enc) }.start()
+        val encFinal = enc!!
+        Thread { drain(encFinal) }.start()
         if (hasMic) Thread { audioLoop(proj) }.start()
     }
 
