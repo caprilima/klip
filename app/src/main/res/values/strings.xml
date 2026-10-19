@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Klip</string>
+    <string name="acc_desc">F8 tuşuna basınca son 30 saniyeyi klip olarak kaydeder.</string>
+</resources>
